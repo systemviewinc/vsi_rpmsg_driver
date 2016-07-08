@@ -73,9 +73,9 @@ struct _rpmsg_dev_params {
 };
 
 /* module parameters */
-static int rpmsg_dev_major = 242; // nothing special just more than vsi_driver
-module_param(rpmsg_dev_major, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);/**< Insmod Parameter */
-MODULE_PARM_DESC(rpmsg_dev_major, "MajorNumber");/**< Insmod Parameter */
+static int major = 242; // nothing special just more than vsi_driver
+module_param(major, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);/**< Insmod Parameter */
+MODULE_PARM_DESC(major, "MajorNumber");/**< Insmod Parameter */
 
 static int rpmsg_max_files = 32; // maximum number of files allowed
 module_param(rpmsg_max_files, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);/**< Insmod Parameter */
@@ -404,15 +404,17 @@ static unsigned int rpmsg_dev_poll(struct file *p_file, poll_table * pwait)
 {
 	struct _rpmsg_file_params *rfp = p_file->private_data;
 	unsigned long lock_flags;
+	unsigned int mask = 0;
+
+	poll_wait(p_file,&_g_rdp->usr_wait_q,pwait);
 	spin_lock_irqsave(&rfp->sync_lock,lock_flags);
-	if (rfp->block_flag == 0) {
+	if (rfp->block_flag != 0) {
 		spin_unlock_irqrestore(&rfp->sync_lock,lock_flags);
-		/* Block the calling context till data becomes available */
-		wait_event_interruptible(_g_rdp->usr_wait_q,
-					 rfp->block_flag != 0);
+		printk(KERN_INFO"got data data %p\n",&rfp->block_flag);
+		mask |= POLLIN;
 	} else 	spin_unlock_irqrestore(&rfp->sync_lock,lock_flags);
-	
-	return 0;
+
+	return mask;
 }
 
 
@@ -482,6 +484,8 @@ static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data,
 			}
 			
 			/* Wake up any blocking contexts waiting for data */
+			pr_info("got data waking up waiting processes %d %d %p\n",
+				rph.minor_num,len,&local->block_flag);
 			local->block_flag = 1;
 			spin_unlock(&local->sync_lock);
 			spin_unlock_irqrestore(&_cb_lock,_lock_flags);
@@ -588,7 +592,7 @@ static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev)
 	dev_set_drvdata(&rpdev->dev, local);
 
 	// register the drver to the kernel
-	if ((status = register_chrdev(rpmsg_dev_major, "vsi_rpmsg_driver", &rpmsg_dev_fops)) != 0) {
+	if ((status = register_chrdev(major, "vsi_rpmsg_driver", &rpmsg_dev_fops)) != 0) {
 		pr_err("vsi_rpmsg_driver Cannot register driver %d",status);
 		goto error1;
 	}
@@ -640,7 +644,7 @@ static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_channel *rpdev)
 
 	kfree(local->_file_parms);
 	kfree(_rpmsg_tgt_file_opened);
-	unregister_chrdev(rpmsg_dev_major, "vsi_rpmsg_driver");
+	unregister_chrdev(major, "vsi_rpmsg_driver");
 }
 
 static int __init init(void)
