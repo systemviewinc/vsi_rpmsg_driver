@@ -19,7 +19,8 @@ struct _rpmsg_proxy_header {
 
 // note this is defined in the virtio kernel 
 // DO NOT CHANGE TO LARGER VALUE
-#define MAX_RPMSG_BUFF_SIZE		(512-sizeof(struct rpmsg_hdr))
+//#define MAX_RPMSG_BUFF_SIZE		(512-sizeof(struct rpmsg_hdr))
+#define MAX_RPMSG_BUFF_SIZE		(512-20)
 
 #define IOCTL_CMD_GET_KFIFO_SIZE	1
 #define IOCTL_CMD_GET_AVAIL_DATA_SIZE	2

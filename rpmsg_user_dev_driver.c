@@ -133,7 +133,7 @@ static int rpmsg_dev_open(struct inode *inode, struct file *p_file)
 	spin_lock_init(&rfp->sync_lock);
 
 	/* Allocate kfifo for rpmsg */
-	status = kfifo_alloc(&rfp->rx_kfifo, RPMSG_KFIFO_SIZE, GFP_KERNEL);
+	status = kfifo_alloc(&rfp->rx_kfifo, RPMSG_KFIFO_SIZE*4, GFP_KERNEL);
 	if (status) {
 		pr_err("Failed to run kfifo_alloc.");
 		mutex_unlock(&_g_access);
@@ -440,11 +440,6 @@ static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data,
 		memcpy(&rph,data,sizeof(rph));
 		len  -= sizeof(rph);
 		data  = ((char *)data) + sizeof(rph);
-		if (rph.minor_num != 0 && rph.minor_num != 1) {
-			pr_err("Invalid header %d, %d, %d\n",rph.operation, rph.minor_num, rph.xfer_len);
-			spin_unlock_irqrestore(&_cb_lock, _lock_flags);
-			return;
-		}
 		local = _g_rdp->_file_parms[rph.minor_num];
 		//pr_info("local %d, %d, %d\n",rph.operation, rph.minor_num, rph.xfer_len);
 
@@ -578,7 +573,7 @@ static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev)
 	init_waitqueue_head(&write_thread_b);
 	init_waitqueue_head(&write_thread_e);
 	spin_lock_init(&wt_fifo_lock);
-	status = kfifo_alloc(&write_thread_fifo, RPMSG_KFIFO_SIZE, GFP_KERNEL);
+	status = kfifo_alloc(&write_thread_fifo, RPMSG_KFIFO_SIZE*4, GFP_KERNEL);
 	if (status) {
 		pr_err("Failed to run kfifo_alloc .");
 		goto error1;
