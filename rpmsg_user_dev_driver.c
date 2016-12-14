@@ -33,43 +33,46 @@
 #include <linux/rpmsg.h>
 #include <linux/spinlock.h>
 
+#include <linux/mm.h>
+#include <asm/io.h>
+
 #include "vsi_rpmsg_header.h"
 
 
 /* Shutdown message ID */
-#define SHUTDOWN_MSG			0xEF56A55A
+#define SHUTDOWN_MSG 0xEF56A55A
 
 #define RPMSG_USER_DEV_MAX_MINORS 10
 
 #define RPMSG_INIT_MSG "init_msg"
 
-#define USEABLE_BUFF_SIZE		(MAX_RPMSG_BUFF_SIZE-sizeof(struct _rpmsg_proxy_header))
+#define USEABLE_BUFF_SIZE (MAX_RPMSG_BUFF_SIZE-sizeof(struct _rpmsg_proxy_header))
 /**
  * rpmsg per file data structure initialized when opened
- * 
+ *
  */
 struct _rpmsg_file_params {
-	int 	 	minor_num;
-	int		established;
-	spinlock_t 	sync_lock;
-	struct kfifo    rx_kfifo;
-	int 		block_flag;	
-	char 		tx_buff[MAX_RPMSG_BUFF_SIZE]; /* buffer to keep the message to send */
+	int minor_num;
+	int established;
+	spinlock_t sync_lock;
+	struct kfifo rx_kfifo;
+	int block_flag;
+	char tx_buff[MAX_RPMSG_BUFF_SIZE]; /* buffer to keep the message to send */
 };
 
 /**
  * rpmsg device parameters
- * 
+ *
  */
 struct _rpmsg_dev_params {
-	int 			rpmsg_major;
-	struct device 		*rpmsg_dev;
-	wait_queue_head_t 	usr_wait_q;
-	struct rpmsg_channel 	*rpmsg_chnl;
-	u32 			rpmsg_dst;
-	int			n_files;
+	int rpmsg_major;
+	struct device *rpmsg_dev;
+	wait_queue_head_t usr_wait_q;
+	struct rpmsg_channel *rpmsg_chnl;
+	u32 rpmsg_dst;
+	int n_files;
 	struct _rpmsg_file_params **_file_parms;
-	char 			g_tx_buff[MAX_RPMSG_BUFF_SIZE]; /* buffer to keep the message to send */
+	char g_tx_buff[MAX_RPMSG_BUFF_SIZE]; /* buffer to keep the message to send */
 };
 
 /* module parameters */
@@ -82,30 +85,29 @@ module_param(rpmsg_max_files, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);/**< I
 MODULE_PARM_DESC(rpmsg_max_files, "MaximumNumberOfFiles");/**< Insmod Parameter */
 
 /* global variables */
-spinlock_t 		_cb_lock  ;
-int			wt_block;
-wait_queue_head_t 	write_thread_b;
-wait_queue_head_t 	write_thread_e;
-spinlock_t 		wt_fifo_lock;
-struct kfifo		write_thread_fifo;
+spinlock_t _cb_lock  ;
+int wt_block;
+wait_queue_head_t write_thread_b;
+wait_queue_head_t write_thread_e;
+spinlock_t wt_fifo_lock;
+struct kfifo write_thread_fifo;
 
 struct mutex _g_access; // protect access to global variables
 struct mutex _g_write;  // only one thread can write at a time
 static struct _rpmsg_dev_params *_g_rdp;
 static int *_rpmsg_tgt_file_opened;
 
-static const char *const shutdown_argv[]
-		= { "/sbin/shutdown", "-h", "-P", "now", NULL };
+static const char *const shutdown_argv[] = { "/sbin/shutdown", "-h", "-P", "now", NULL };
 static struct class *rpmsg_class;
 
 
-/** 
+/**
  * @brief called when a remote proc file is opened
- * 
- * @param inode 
- * @param p_file 
- * 
- * @return 
+ *
+ * @param inode
+ * @param p_file
+ *
+ * @return
  */
 static int rpmsg_dev_open(struct inode *inode, struct file *p_file)
 {
@@ -125,7 +127,7 @@ static int rpmsg_dev_open(struct inode *inode, struct file *p_file)
 	/* Initialize rpmsg instance with device params from inode */
 	rfp = (struct _rpmsg_file_params *)kmalloc(sizeof(struct _rpmsg_file_params), GFP_KERNEL);
 	memset(rfp,0,sizeof(struct _rpmsg_file_params));
-	
+
 	/* save the minor */
 	rfp->minor_num = MINOR(inode->i_rdev);
 
@@ -149,9 +151,8 @@ static int rpmsg_dev_open(struct inode *inode, struct file *p_file)
 
 	// wait till remote opens the file as well
 	if (!_rpmsg_tgt_file_opened[rfp->minor_num]) {
-		wait_event_interruptible(_g_rdp->usr_wait_q, 
-					 _rpmsg_tgt_file_opened[rfp->minor_num] != 0);
-	} 
+		wait_event_interruptible(_g_rdp->usr_wait_q, _rpmsg_tgt_file_opened[rfp->minor_num] != 0);
+	}
 
 	while(mutex_lock_interruptible(&_g_access));
 
@@ -165,19 +166,18 @@ static int rpmsg_dev_open(struct inode *inode, struct file *p_file)
 	_rpmsg_tgt_file_opened[rfp->minor_num]++;
 	rfp->established = 1;
 	mutex_unlock(&_g_access);
-	pr_info("opened file %d rx kfifo size = %d  element size %d\n", 
-		rfp->minor_num, kfifo_size(&rfp->rx_kfifo), kfifo_esize(&rfp->rx_kfifo));
+	pr_info("opened file %d rx kfifo size = %d  element size %d\n", rfp->minor_num, kfifo_size(&rfp->rx_kfifo), kfifo_esize(&rfp->rx_kfifo));
 
 	return 0;
 }
 
-/** 
+/**
  * @brief rease or close the file
- * 
- * @param inode 
- * @param p_file 
- * 
- * @return 
+ *
+ * @param inode
+ * @param p_file
+ *
+ * @return
  */
 static int rpmsg_dev_release(struct inode *inode, struct file *p_file)
 {
@@ -191,7 +191,7 @@ static int rpmsg_dev_release(struct inode *inode, struct file *p_file)
 	while(mutex_lock_interruptible(&_g_access));
 
 	if (rfp->established) {
-		/* send close to remote */		
+		/* send close to remote */
 		struct _rpmsg_proxy_header rph;
 		rph.operation = RPROC_FCLOSE;
 		rph.minor_num = minor;
@@ -212,7 +212,7 @@ static int rpmsg_dev_release(struct inode *inode, struct file *p_file)
 }
 
 static void write_thread (struct rpmsg_channel 	*rpmsg_chnl)
-{	
+{
 	char xbuffer [MAX_RPMSG_BUFF_SIZE*2];
 	int len;
 	printk(KERN_INFO"write_thread started %p\n", rpmsg_chnl);
@@ -225,7 +225,7 @@ static void write_thread (struct rpmsg_channel 	*rpmsg_chnl)
 			kfifo_out(&write_thread_fifo,xbuffer,len);
 			rpmsg_sendto(rpmsg_chnl,xbuffer,len,rpmsg_chnl->dst);
 			printk(KERN_INFO,"%s sent %d bytes\n",__func__,len);
-		} 
+		}
 		wt_block = 0;
 		spin_unlock(&wt_fifo_lock);
 		wake_up_interruptible(&write_thread_e);
@@ -234,23 +234,21 @@ static void write_thread (struct rpmsg_channel 	*rpmsg_chnl)
 	printk(KERN_INFO"Leaving write_thread\n");
 }
 
-/** 
+/**
  * @brief called for a device write
- * 
- * @param p_file 
- * @param ubuff 
- * @param len 
- * @param p_off 
- * 
- * @return 
+ *
+ * @param p_file
+ * @param ubuff
+ * @param len
+ * @param p_off
+ *
+ * @return
  */
-static ssize_t rpmsg_dev_write(struct file *p_file,
-				const char __user *ubuff, size_t len,
-				loff_t *p_off)
+static ssize_t rpmsg_dev_write(struct file *p_file, const char __user *ubuff, size_t len, loff_t *p_off)
 {
 	struct _rpmsg_file_params *local = p_file->private_data;
 	struct _rpmsg_proxy_header rph;
-	int err, wlen = len;
+	int wlen = len;
 	unsigned int size, bytes;
 
 	while(mutex_lock_interruptible(&_g_write)); // only one thread can enter write
@@ -259,7 +257,7 @@ static ssize_t rpmsg_dev_write(struct file *p_file,
 		if (wlen < USEABLE_BUFF_SIZE) size = wlen;
 		else size = USEABLE_BUFF_SIZE;
 
-		//prepend operation 
+		//prepend operation
 		rph.operation = RPROC_FWRITE;
 		rph.minor_num = local->minor_num;
 		rph.xfer_len  = size ;
@@ -291,29 +289,28 @@ static ssize_t rpmsg_dev_write(struct file *p_file,
 		/* }  */
 		ubuff += size;
 		wlen  -= size;
-	} 
+	}
 
 	mutex_unlock(&_g_write);
 	return len;
 }
 
-/** 
+/**
  * @brief called for a device read
- * 
- * @param p_file 
- * @param ubuff 
- * @param len 
- * @param p_off 
- * 
- * @return 
+ *
+ * @param p_file
+ * @param ubuff
+ * @param len
+ * @param p_off
+ *
+ * @return
  */
-static ssize_t rpmsg_dev_read(struct file *p_file, char __user *ubuff,
-				size_t len, loff_t *p_off)
+static ssize_t rpmsg_dev_read(struct file *p_file, char __user *ubuff, size_t len, loff_t *p_off)
 {
 	struct _rpmsg_file_params *local = p_file->private_data;
 	int retval;
 	unsigned int data_available, data_used, bytes_copied;
-	
+
 	if (!local->established) {
 		pr_err("open not completed no reads allowed minor(%d)\n",local->minor_num);
 		return -EAGAIN;
@@ -328,8 +325,7 @@ static ssize_t rpmsg_dev_read(struct file *p_file, char __user *ubuff,
 			return -EAGAIN;
 
 		/* Block the calling context till data becomes available */
-		wait_event_interruptible(_g_rdp->usr_wait_q,
-					local->block_flag != 0);
+		wait_event_interruptible(_g_rdp->usr_wait_q, local->block_flag != 0);
 		spin_lock(&local->sync_lock);
 	}
 
@@ -349,17 +345,16 @@ static ssize_t rpmsg_dev_read(struct file *p_file, char __user *ubuff,
 	return retval ? retval : bytes_copied;
 }
 
-/** 
+/**
  * @brief ioctl call
- * 
- * @param p_file 
- * @param cmd 
- * @param arg 
- * 
- * @return 
+ *
+ * @param p_file
+ * @param cmd
+ * @param arg
+ *
+ * @return
  */
-static long rpmsg_dev_ioctl(struct file *p_file, unsigned int cmd,
-				unsigned long arg)
+static long rpmsg_dev_ioctl(struct file *p_file, unsigned int cmd, unsigned long arg)
 {
 	unsigned int tmp;
 	struct _rpmsg_file_params *local = p_file->private_data;
@@ -373,8 +368,7 @@ static long rpmsg_dev_ioctl(struct file *p_file, unsigned int cmd,
 
 	case IOCTL_CMD_GET_AVAIL_DATA_SIZE:
 		tmp = kfifo_len(&local->rx_kfifo);
-		pr_info("kfifo len ioctl = %d  element size %d", 
-			kfifo_len(&local->rx_kfifo), kfifo_esize(&local->rx_kfifo));
+		pr_info("kfifo len ioctl = %d  element size %d", kfifo_len(&local->rx_kfifo), kfifo_esize(&local->rx_kfifo));
 		if (copy_to_user((unsigned int *)arg, &tmp, sizeof(int)))
 			return -EACCES;
 		break;
@@ -392,13 +386,13 @@ static long rpmsg_dev_ioctl(struct file *p_file, unsigned int cmd,
 }
 
 
-/** 
- * @brief will wait till data arrives on the 
- * 
- * @param filep 
- * @param pwait 
- * 
- * @return 
+/**
+ * @brief will wait till data arrives on the
+ *
+ * @param filep
+ * @param pwait
+ *
+ * @return
  */
 static unsigned int rpmsg_dev_poll(struct file *p_file, poll_table * pwait)
 {
@@ -418,8 +412,7 @@ static unsigned int rpmsg_dev_poll(struct file *p_file, poll_table * pwait)
 }
 
 
-static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data,
-					int len, void *priv, u32 src)
+static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data, int len, void *priv, u32 src)
 {
 	struct _rpmsg_proxy_header rph = {0,0,0};
 	struct _rpmsg_file_params *local;
@@ -451,7 +444,7 @@ static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data,
 			spin_unlock_irqrestore(&_cb_lock, _lock_flags);
 			wake_up_interruptible(&_g_rdp->usr_wait_q);
 			return;
-			
+
 		case RPROC_FWRITE:
 			if (len != rph.xfer_len) {
 				pr_err("Wierd length %d %d\n",len, rph.xfer_len);
@@ -477,7 +470,7 @@ static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data,
 			if (kfifo_in(&local->rx_kfifo, data, (unsigned int)len) != len) {
 				pr_err("fifo put error %d\n",len);
 			}
-			
+
 			/* Wake up any blocking contexts waiting for data */
 			pr_info("got data waking up waiting processes %d %d %p\n",
 				rph.minor_num,len,&local->block_flag);
@@ -486,7 +479,7 @@ static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data,
 			spin_unlock_irqrestore(&_cb_lock,_lock_flags);
 			wake_up_interruptible(&_g_rdp->usr_wait_q);
 			return;
-			
+
 		case RPROC_FCLOSE:
 
 			if (!local) {
@@ -495,26 +488,61 @@ static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data,
 			}
 			if (!local->established) {
 				pr_err("close operation from remote on unestablished channel %d\n",rph.minor_num);
-			} 
+			}
 			spin_lock(&local->sync_lock);
 			_rpmsg_tgt_file_opened[rph.minor_num] --;
 			local->established = 0;
 			spin_unlock(&local->sync_lock);
 			break;
-			
+
 		default:
 			pr_err("Unexpected Header operation code received (%d) minor (%d)\n",
-			       rph.operation, rph.minor_num); 
+				   rph.operation, rph.minor_num);
 			break; // drop the rest of the packet
 		}
 		spin_unlock_irqrestore(&_cb_lock,_lock_flags);
 	}
 }
 
+static char *buffer;
+
+static int rpmsg_dev_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	unsigned long page, pos;
+	unsigned long start = (unsigned long)vma->vm_start;
+	unsigned long size = (unsigned long)(vma->vm_end-vma->vm_start);
+
+	printk(KERN_INFO "rpmsg_dev_mmap called\n");
+
+	/* if userspace tries to mmap beyond end of our buffer, fail */
+	if (size > USEABLE_BUFF_SIZE)
+		return -EINVAL;
+
+	/* start off at the start of the buffer */
+	pos = (unsigned long)buffer;
+
+	/* loop through all the physical pages in the buffer */
+	/* Remember this won't work for vmalloc()d memory ! */
+	while (size > 0) {
+		/* remap a single physical page to the process's vma */
+		page = virt_to_phys((void *)pos);
+		/* fourth argument is the protection of the map. you might
+		 * want to use vma->vm_page_prot instead.
+		 */
+		// if (remap_page_range(start, page, PAGE_SIZE, PAGE_SHARED))
+		// 	return -EAGAIN;
+		start += PAGE_SIZE;
+		pos += PAGE_SIZE;
+		size -= PAGE_SIZE;
+	}
+	return 0;
+}
+
 static const struct file_operations rpmsg_dev_fops = {
 	.owner = THIS_MODULE,
 	.read = rpmsg_dev_read,
 	.write = rpmsg_dev_write,
+	.mmap = rpmsg_dev_mmap,
 	.open = rpmsg_dev_open,
 	.unlocked_ioctl = rpmsg_dev_ioctl,
 	.release = rpmsg_dev_release,
@@ -583,7 +611,7 @@ static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev)
 	if (kthread_heap = kthread_create(write_thread,(void*)rpdev,"vsi_write_thread")) {
 		wake_up_process(kthread_heap);
 	}
-	
+
 	dev_set_drvdata(&rpdev->dev, local);
 
 	// register the drver to the kernel
@@ -591,7 +619,7 @@ static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev)
 		pr_err("vsi_rpmsg_driver Cannot register driver %d",status);
 		goto error1;
 	}
-	
+
 	// initialize remote
 	memcpy(local->g_tx_buff,RPMSG_INIT_MSG,strlen(RPMSG_INIT_MSG));
 	while(mutex_lock_interruptible(&_g_access));
@@ -626,15 +654,15 @@ out:
 static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_channel *rpdev)
 {
 	struct _rpmsg_dev_params *local = dev_get_drvdata(&rpdev->dev);
-	int i;
+	int i = 0;
 
 	dev_info(&rpdev->dev, "%s", __func__);
-	
+
 	/* free all the memoty for the files that are not closed */
-	for (i =0 ; i < rpmsg_max_files; i++) {		
+	for (; i < rpmsg_max_files; i++) {
 		if (local->_file_parms[i] == 0) continue; // closed
 		kfifo_free(&local->_file_parms[i]->rx_kfifo);
-		local->_file_parms[i] = 0;		
+		local->_file_parms[i] = 0;
 	}
 
 	kfree(local->_file_parms);
