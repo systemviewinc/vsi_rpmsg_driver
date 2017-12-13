@@ -65,15 +65,17 @@ struct _rpmsg_file_params {
  *
  */
 struct _rpmsg_dev_params {
-	int rpmsg_major;
-	struct device *rpmsg_dev;
-	wait_queue_head_t usr_wait_q;
-	struct rpmsg_channel *rpmsg_chnl;
-	u32 rpmsg_dst;
-	int n_files;
+	struct device 		*dev_rpmsg;
+	struct rpmsg_device 	*rpmsg_dev;
+	int 			rpmsg_major;
+	wait_queue_head_t 	usr_wait_q;
+	u32 			rpmsg_dst;
+	int 			n_files;
 	struct _rpmsg_file_params **_file_parms;
-	char g_tx_buff[MAX_RPMSG_BUFF_SIZE]; /* buffer to keep the message to send */
+	char 			g_tx_buff[MAX_RPMSG_BUFF_SIZE]; /* buffer to keep the message to send */
 };
+#define dev_to_eptdev(dev) container_of(dev, struct _rpmsg_dev_params, dev_rpmsg)
+#define cdev_to_eptdev(i_cdev) container_of(i_cdev, struct _rpmsg_dev_params, cdev)
 
 /* module parameters */
 static int major = 242; // nothing special just more than vsi_driver
@@ -161,7 +163,7 @@ static int rpmsg_dev_open(struct inode *inode, struct file *p_file)
 	rph.minor_num = rfp->minor_num;
 	rph.xfer_len  = sizeof(rph);
 	memcpy(rfp->tx_buff, &rph,sizeof(rph));
-	if (rpmsg_sendto(_g_rdp->rpmsg_chnl, rfp->tx_buff, sizeof(rph), _g_rdp->rpmsg_chnl->dst))
+	if (rpmsg_sendto(_g_rdp->rpmsg_dev->ept, rfp->tx_buff, sizeof(rph), _g_rdp->rpmsg_dev->dst))
 		pr_err("cannot send open message to remote\n");
 	_rpmsg_tgt_file_opened[rfp->minor_num]++;
 	rfp->established = 1;
@@ -197,7 +199,7 @@ static int rpmsg_dev_release(struct inode *inode, struct file *p_file)
 		rph.minor_num = minor;
 		rph.xfer_len  = sizeof(rph);
 		memcpy(rfp->tx_buff, &rph,sizeof(rph));
-		err = rpmsg_sendto(_g_rdp->rpmsg_chnl, rfp->tx_buff, sizeof(rph), _g_rdp->rpmsg_chnl->dst);
+		err = rpmsg_sendto(_g_rdp->rpmsg_dev->ept, rfp->tx_buff, sizeof(rph), _g_rdp->rpmsg_dev->dst);
 		if (err) {
 			pr_err("cannot send close message to remote (%d)\n",err);
 		}
@@ -211,20 +213,23 @@ static int rpmsg_dev_release(struct inode *inode, struct file *p_file)
 	return 0;
 }
 
-static void write_thread (struct rpmsg_channel 	*rpmsg_chnl)
+static void write_thread (struct rpmsg_device 	*rpmsg_dev)
 {
 	char xbuffer [MAX_RPMSG_BUFF_SIZE*2];
-	int len;
-	printk(KERN_INFO"write_thread started %p\n", rpmsg_chnl);
+	int len, err;
+	printk(KERN_INFO"write_thread started %p\n", rpmsg_dev);
 	while(!kthread_should_stop()){
 		wait_event_interruptible(write_thread_b,wt_block != 0);
+		printk(KERN_INFO"write thread wokenup\n");
 		// some one put something in
 		spin_lock(&wt_fifo_lock);
 		while ((len = kfifo_len(&write_thread_fifo)) != 0) {
 			if (len > MAX_RPMSG_BUFF_SIZE) len = MAX_RPMSG_BUFF_SIZE;
 			kfifo_out(&write_thread_fifo,xbuffer,len);
-			rpmsg_sendto(rpmsg_chnl,xbuffer,len,rpmsg_chnl->dst);
-			printk(KERN_INFO,"%s sent %d bytes\n",__func__,len);
+			if (err = rpmsg_send(rpmsg_dev->ept,xbuffer,len))
+				pr_err("cannot send to remote (%d)\n",err);
+				
+			printk(KERN_INFO"%s sent %d bytes 0x%p\n",__func__,len,rpmsg_dev->ept);
 		}
 		wt_block = 0;
 		spin_unlock(&wt_fifo_lock);
@@ -252,7 +257,7 @@ static ssize_t rpmsg_dev_write(struct file *p_file, const char __user *ubuff, si
 	unsigned int size, bytes;
 
 	while(mutex_lock_interruptible(&_g_write)); // only one thread can enter write
-	//pr_info("write( %d, %p , %d)\n",local->minor_num, ubuff, len);
+	pr_info("write( %d, %p , %d)\n",local->minor_num, ubuff, wlen);
 	while (wlen > 0) {
 		if (wlen < USEABLE_BUFF_SIZE) size = wlen;
 		else size = USEABLE_BUFF_SIZE;
@@ -272,21 +277,6 @@ static ssize_t rpmsg_dev_write(struct file *p_file, const char __user *ubuff, si
 		wt_block = 1;
 		spin_unlock(&wt_fifo_lock);
 		wake_up_interruptible(&write_thread_b);
-		/* // ensures that the write goes as one packet  */
-		/* memcpy(local->tx_buff,&rph,sizeof(rph)); */
-		/* // copy into kernel space  */
-		/* if (copy_from_user(local->tx_buff+sizeof(rph), ubuff, size)) { */
-		/* 	pr_err("%s: user to kernel buff copy error.\n", __func__); */
-		/* 	len = -1; */
-		/* 	break; */
-		/* } */
-		/* err = rpmsg_sendto(_g_rdp->rpmsg_chnl, local->tx_buff, size + sizeof(rph), _g_rdp->rpmsg_chnl->dst); */
-		/* if (err) { */
-		/* 	pr_err("rpmsg_sendto (size = %d) error: %d\n", size, err); */
-		/* 	len = -1; */
-		/* 	size = 0; */
-		/* 	break; */
-		/* }  */
 		ubuff += size;
 		wlen  -= size;
 	}
@@ -379,7 +369,7 @@ static long rpmsg_dev_ioctl(struct file *p_file, unsigned int cmd, unsigned long
 		break;
 
 	default:
-		return -EINVAL;
+		return 0; // for now make runtime happy
 	}
 
 	return 0;
@@ -412,7 +402,7 @@ static unsigned int rpmsg_dev_poll(struct file *p_file, poll_table * pwait)
 }
 
 
-static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_channel *rpdev, void *data, int len, void *priv, u32 src)
+static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_device *rpdev, void *data, int len, void *priv, u32 src)
 {
 	struct _rpmsg_proxy_header rph = {0,0,0};
 	struct _rpmsg_file_params *local;
@@ -512,7 +502,7 @@ static int rpmsg_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 	unsigned long start = (unsigned long)vma->vm_start;
 	unsigned long size = (unsigned long)(vma->vm_end-vma->vm_start);
 
-	printk(KERN_INFO "rpmsg_dev_mmap called\n");
+	printk(KERN_INFO"rpmsg_dev_mmap called\n");
 
 	/* if userspace tries to mmap beyond end of our buffer, fail */
 	if (size > USEABLE_BUFF_SIZE)
@@ -549,9 +539,9 @@ static const struct file_operations rpmsg_dev_fops = {
 	.poll = rpmsg_dev_poll,
 };
 
-static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev);
+static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_device *rpdev);
 
-static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_channel *rpdev);
+static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_device *rpdev);
 
 static struct rpmsg_device_id rpmsg_user_dev_drv_id_table[] = {
 	{ .name = "rpmsg-openamp-demo-channel" },
@@ -568,7 +558,7 @@ static struct rpmsg_driver rpmsg_user_dev_drv = {
 };
 struct task_struct * kthread_heap;
 
-static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev)
+static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_device *rpdev)
 {
 	struct _rpmsg_dev_params *local;
 	struct _rpmsg_proxy_header rph;
@@ -595,7 +585,7 @@ static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev)
 	mutex_init(&_g_write);
 	spin_lock_init(&_cb_lock);
 
-	local->rpmsg_chnl = rpdev;
+	local->rpmsg_dev = rpdev;
 
 	wt_block = 0;
 	init_waitqueue_head(&write_thread_b);
@@ -621,24 +611,25 @@ static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_channel *rpdev)
 	}
 
 	// initialize remote
-	memcpy(local->g_tx_buff,RPMSG_INIT_MSG,strlen(RPMSG_INIT_MSG));
 	while(mutex_lock_interruptible(&_g_access));
-	if (rpmsg_sendto(local->rpmsg_chnl, local->g_tx_buff, strlen(RPMSG_INIT_MSG), rpdev->dst)) {
+	memcpy(local->g_tx_buff,RPMSG_INIT_MSG,strlen(RPMSG_INIT_MSG));
+	if (rpmsg_sendto(local->rpmsg_dev->ept, local->g_tx_buff, strlen(RPMSG_INIT_MSG), rpdev->dst)) {
 		pr_err("Failed to send init_msg to target 0x%x.", local->rpmsg_dst);
 		goto error1;
 	}
-	dev_info(&rpdev->dev, "Sent init_msg of size to target 0x%x.", local->rpmsg_dst);
-	dev_info(&rpdev->dev, "new channel: 0x%x -> 0x%x!\n", rpdev->src, rpdev->dst);
-
+	dev_info(&rpdev->dev, "Sent init_msg of size to target 0x%x 0x%p.", local->rpmsg_dst, local->rpmsg_dev->ept);
+	wait_event_interruptible_timeout(_g_rdp->usr_wait_q,1,msecs_to_jiffies(20));
 	/* the protocol message */
 	rph.operation = RPROC_INIT;
 	rph.minor_num = -1;
 	rph.xfer_len = sizeof(rph);
 	memcpy(local->g_tx_buff, &rph, sizeof(rph));
-	if (rpmsg_sendto(local->rpmsg_chnl, local->g_tx_buff, sizeof(rph), rpdev->dst)) {
+	if (rpmsg_sendto(local->rpmsg_dev->ept, local->g_tx_buff, sizeof(rph), rpdev->dst)) {
 		pr_err("Failed to send init protocol to target 0x%x.", local->rpmsg_dst);
 		goto error1;
 	}
+	dev_info(&rpdev->dev, "Sent RPROC_INIT of size to target 0x%x.", local->rpmsg_dst);
+	dev_info(&rpdev->dev, "new channel: 0x%x -> 0x%x!\n", rpdev->src, rpdev->dst);
 	goto out;
 error1:
 	mutex_unlock(&_g_access);
@@ -651,7 +642,7 @@ out:
 	return 0;
 }
 
-static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_channel *rpdev)
+static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_device *rpdev)
 {
 	struct _rpmsg_dev_params *local = dev_get_drvdata(&rpdev->dev);
 	int i = 0;
