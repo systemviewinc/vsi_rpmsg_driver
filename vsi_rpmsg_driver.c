@@ -168,8 +168,8 @@ static int rpmsg_dev_open(struct inode *inode, struct file *p_file)
 	_rpmsg_tgt_file_opened[rfp->minor_num]++;
 	rfp->established = 1;
 	mutex_unlock(&_g_access);
-	pr_info("opened file %d rx kfifo size = %d  element size %d\n", rfp->minor_num, kfifo_size(&rfp->rx_kfifo), kfifo_esize(&rfp->rx_kfifo));
-
+	pr_info("opened file %d rx kfifo size = %d  element size %d\n",
+		rfp->minor_num, kfifo_size(&rfp->rx_kfifo), kfifo_esize(&rfp->rx_kfifo));
 	return 0;
 }
 
@@ -213,10 +213,11 @@ static int rpmsg_dev_release(struct inode *inode, struct file *p_file)
 	return 0;
 }
 
-static void write_thread (struct rpmsg_device 	*rpmsg_dev)
+static int write_thread (void *dev_data)
 {
 	char xbuffer [MAX_RPMSG_BUFF_SIZE*2];
 	int len, err;
+	struct rpmsg_device 	*rpmsg_dev = (struct rpmsg_device  *)dev_data;
 	printk(KERN_INFO"write_thread started %p\n", rpmsg_dev);
 	while(!kthread_should_stop()){
 		wait_event_interruptible(write_thread_b,wt_block != 0);
@@ -226,10 +227,9 @@ static void write_thread (struct rpmsg_device 	*rpmsg_dev)
 		while ((len = kfifo_len(&write_thread_fifo)) != 0) {
 			if (len > MAX_RPMSG_BUFF_SIZE) len = MAX_RPMSG_BUFF_SIZE;
 			kfifo_out(&write_thread_fifo,xbuffer,len);
-			if (err = rpmsg_send(rpmsg_dev->ept,xbuffer,len))
-				pr_err("cannot send to remote (%d)\n",err);
-				
-			printk(KERN_INFO"%s sent %d bytes 0x%p\n",__func__,len,rpmsg_dev->ept);
+			if (err = rpmsg_sendto(_g_rdp->rpmsg_dev->ept, xbuffer,(size_t)len, _g_rdp->rpmsg_dev->dst))
+				pr_err("cannot send to remote (%d)\n",err);				
+			printk(KERN_INFO"%s sent_new %d bytes 0x%p\n",__func__,len,_g_rdp->rpmsg_dev->ept);
 		}
 		wt_block = 0;
 		spin_unlock(&wt_fifo_lock);
@@ -257,7 +257,7 @@ static ssize_t rpmsg_dev_write(struct file *p_file, const char __user *ubuff, si
 	unsigned int size, bytes;
 
 	while(mutex_lock_interruptible(&_g_write)); // only one thread can enter write
-	pr_info("write( %d, %p , %d)\n",local->minor_num, ubuff, wlen);
+	//pr_info("write( %d, %p , %d)\n",local->minor_num, ubuff, wlen);
 	while (wlen > 0) {
 		if (wlen < USEABLE_BUFF_SIZE) size = wlen;
 		else size = USEABLE_BUFF_SIZE;
@@ -389,12 +389,16 @@ static unsigned int rpmsg_dev_poll(struct file *p_file, poll_table * pwait)
 	struct _rpmsg_file_params *rfp = p_file->private_data;
 	unsigned long lock_flags;
 	unsigned int mask = 0;
+	int err, minor;
 
+	minor = rfp->minor_num;
+	//pr_info("%s going to wait minor (%d)", __func__, minor);
 	poll_wait(p_file,&_g_rdp->usr_wait_q,pwait);
+	//pr_info("%s woken up (%d) %d", __func__, minor, rfp->block_flag );
 	spin_lock_irqsave(&rfp->sync_lock,lock_flags);
 	if (rfp->block_flag != 0) {
 		spin_unlock_irqrestore(&rfp->sync_lock,lock_flags);
-		printk(KERN_INFO"got data data %p\n",&rfp->block_flag);
+		//printk(KERN_INFO"got data data %p\n",&rfp->block_flag);
 		mask |= POLLIN;
 	} else 	spin_unlock_irqrestore(&rfp->sync_lock,lock_flags);
 
@@ -402,7 +406,7 @@ static unsigned int rpmsg_dev_poll(struct file *p_file, poll_table * pwait)
 }
 
 
-static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_device *rpdev, void *data, int len, void *priv, u32 src)
+static int rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_device *rpdev, void *data, int len, void *priv, u32 src)
 {
 	struct _rpmsg_proxy_header rph = {0,0,0};
 	struct _rpmsg_file_params *local;
@@ -462,8 +466,8 @@ static void rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_device *rpdev, void *data, 
 			}
 
 			/* Wake up any blocking contexts waiting for data */
-			pr_info("got data waking up waiting processes %d %d %p\n",
-				rph.minor_num,len,&local->block_flag);
+			//pr_info("got data waking up waiting processes %d %d %p\n",
+			//	rph.minor_num,len,&local->block_flag);
 			local->block_flag = 1;
 			spin_unlock(&local->sync_lock);
 			spin_unlock_irqrestore(&_cb_lock,_lock_flags);

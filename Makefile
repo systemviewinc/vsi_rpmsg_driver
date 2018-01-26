@@ -1,14 +1,9 @@
-obj-m += vsi_rpmsg_proxy.o
-vsi_rpmsg_proxy-y += rpmsg_user_dev_driver.o
-#KDIR := ../../linux-xlnx/
-#KDIR := ~/Desktop/repos/linux-xlnx-debug/
-#KDIR := ~/Desktop/repos/linux-xlnx/
-#KDIR := ~/DF_vivado/zynq_linux/linux-xlnx
-KDIR := ../../thirdparty/linux-xlnx
-# KDIR := ~/petalinux/Xilinx-ZCU102-2016.2/build/linux/kernel/xlnx-4.4
-PWD := $(shell pwd)
+obj-m += vsi_rpmsg_driver.o
+#vsi_rpmsg_driver-y += vsi_rpmsg_driver.o
 
 all:
-	make -C $(KDIR) M=$(PWD) modules
+	make -C $(KERNEL_SRC) M=$(CURDIR)
+modules_install:
+	make -C $(KERNEL_SRC) M=$(CURDIR) modules_install
 clean:
-	make -C $(KDIR) M=$(PWD) clean
+	make -C $(KERNEL_SRC) M=$(CURDIR) clean
