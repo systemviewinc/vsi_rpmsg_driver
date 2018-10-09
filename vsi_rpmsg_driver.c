@@ -428,7 +428,7 @@ static int rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_device *rpdev, void *data, i
 		len  -= sizeof(rph);
 		data  = ((char *)data) + sizeof(rph);
 		local = _g_rdp->_file_parms[rph.minor_num];
-		//pr_info("local %d, %d, %d\n",rph.operation, rph.minor_num, rph.xfer_len);
+		pr_info("local %d, %d, %d\n",rph.operation, rph.minor_num, rph.xfer_len);
 
 		/* depending on the action coming in : can be open, write, close*/
 		switch (rph.operation) {
