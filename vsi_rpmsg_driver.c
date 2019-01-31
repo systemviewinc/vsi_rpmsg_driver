@@ -221,7 +221,7 @@ static int write_thread (void *dev_data)
 	printk(KERN_INFO"write_thread started %p\n", rpmsg_dev);
 	while(!kthread_should_stop()){
 		wait_event_interruptible(write_thread_b,wt_block != 0);
-		printk(KERN_INFO"write thread wokenup\n");
+		//printk(KERN_INFO"write thread wokenup\n");
 		// some one put something in
 		spin_lock(&wt_fifo_lock);
 		while ((len = kfifo_len(&write_thread_fifo)) != 0) {
@@ -229,7 +229,7 @@ static int write_thread (void *dev_data)
 			kfifo_out(&write_thread_fifo,xbuffer,len);
 			if (err = rpmsg_sendto(_g_rdp->rpmsg_dev->ept, xbuffer,(size_t)len, _g_rdp->rpmsg_dev->dst))
 				pr_err("cannot send to remote (%d)\n",err);				
-			printk(KERN_INFO"%s sent_new %d bytes 0x%p\n",__func__,len,_g_rdp->rpmsg_dev->ept);
+			//printk(KERN_INFO"%s sent_new %d bytes 0x%p\n",__func__,len,_g_rdp->rpmsg_dev->ept);
 		}
 		wt_block = 0;
 		spin_unlock(&wt_fifo_lock);
@@ -428,7 +428,7 @@ static int rpmsg_user_dev_rpmsg_drv_cb(struct rpmsg_device *rpdev, void *data, i
 		len  -= sizeof(rph);
 		data  = ((char *)data) + sizeof(rph);
 		local = _g_rdp->_file_parms[rph.minor_num];
-		pr_info("local %d, %d, %d\n",rph.operation, rph.minor_num, rph.xfer_len);
+		//pr_info("local %d, %d, %d\n",rph.operation, rph.minor_num, rph.xfer_len);
 
 		/* depending on the action coming in : can be open, write, close*/
 		switch (rph.operation) {
