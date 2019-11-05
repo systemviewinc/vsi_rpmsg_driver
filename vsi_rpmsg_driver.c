@@ -38,6 +38,8 @@
 
 #include "vsi_rpmsg_header.h"
 
+extern void unregister_rpmsg_driver(struct rpmsg_driver *rpdrv);
+extern int rpmsg_sendto(struct rpmsg_endpoint *ept, void *data, int len, u32 dst);
 
 /* Shutdown message ID */
 #define SHUTDOWN_MSG 0xEF56A55A
@@ -228,7 +230,7 @@ static int write_thread (void *dev_data)
 			if (len > MAX_RPMSG_BUFF_SIZE) len = MAX_RPMSG_BUFF_SIZE;
 			kfifo_out(&write_thread_fifo,xbuffer,len);
 			if (err = rpmsg_sendto(_g_rdp->rpmsg_dev->ept, xbuffer,(size_t)len, _g_rdp->rpmsg_dev->dst))
-				pr_err("cannot send to remote (%d)\n",err);				
+				pr_err("cannot send to remote (%d)\n",err);
 			//printk(KERN_INFO"%s sent_new %d bytes 0x%p\n",__func__,len,_g_rdp->rpmsg_dev->ept);
 		}
 		wt_block = 0;
