@@ -30,16 +30,12 @@
 #include <linux/kthread.h>
 #include <linux/ioctl.h>
 #include <linux/errno.h>
-#include <linux/rpmsg.h>
 #include <linux/spinlock.h>
 
 #include <linux/mm.h>
 #include <asm/io.h>
 
 #include "vsi_rpmsg_header.h"
-
-extern void unregister_rpmsg_driver(struct rpmsg_driver *rpdrv);
-extern int rpmsg_sendto(struct rpmsg_endpoint *ept, void *data, int len, u32 dst);
 
 /* Shutdown message ID */
 #define SHUTDOWN_MSG 0xEF56A55A
@@ -545,23 +541,6 @@ static const struct file_operations rpmsg_dev_fops = {
 	.poll = rpmsg_dev_poll,
 };
 
-static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_device *rpdev);
-
-static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_device *rpdev);
-
-static struct rpmsg_device_id rpmsg_user_dev_drv_id_table[] = {
-	{ .name = "rpmsg-openamp-demo-channel" },
-	{},
-};
-
-static struct rpmsg_driver rpmsg_user_dev_drv = {
-	.drv.name = "vsi_rpmsg_driver",
-	.drv.owner = THIS_MODULE,
-	.id_table = rpmsg_user_dev_drv_id_table,
-	.probe = rpmsg_user_dev_rpmsg_drv_probe,
-	.remove = rpmsg_user_dev_rpmsg_drv_remove,
-	.callback = rpmsg_user_dev_rpmsg_drv_cb,
-};
 struct task_struct * kthread_heap;
 
 static int rpmsg_user_dev_rpmsg_drv_probe(struct rpmsg_device *rpdev)
@@ -666,6 +645,20 @@ static void rpmsg_user_dev_rpmsg_drv_remove(struct rpmsg_device *rpdev)
 	kfree(_rpmsg_tgt_file_opened);
 	unregister_chrdev(major, "vsi_rpmsg_driver");
 }
+
+static struct rpmsg_device_id rpmsg_user_dev_drv_id_table[] = {
+	{ .name = "rpmsg-openamp-demo-channel" },
+	{},
+};
+
+static struct rpmsg_driver rpmsg_user_dev_drv = {
+	.drv.name = "vsi_rpmsg_driver",
+	.drv.owner = THIS_MODULE,
+	.id_table = rpmsg_user_dev_drv_id_table,
+	.probe = rpmsg_user_dev_rpmsg_drv_probe,
+	.remove = rpmsg_user_dev_rpmsg_drv_remove,
+	.callback = rpmsg_user_dev_rpmsg_drv_cb,
+};
 
 static int __init init(void)
 {
